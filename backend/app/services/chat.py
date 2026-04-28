@@ -1,0 +1,204 @@
+import json
+from typing import Any
+
+from openai import APIConnectionError, APIError, AuthenticationError
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.db.models.bot import Bot
+from app.db.models.chat import ChatMessage, ChatSession
+from app.schemas.chat import ChatRequest, ChatResponse, SourceItem
+from app.services.analytics import AnalyticsService
+from app.services.escalation.service import EscalationService
+from app.services.rag.embeddings import embed_query
+from app.services.rag.openai_client import client
+from app.services.rag.vector_store import FaissVectorStore
+
+
+class ChatService:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+        self.analytics = AnalyticsService(db)
+
+    def answer_question(self, payload: ChatRequest) -> ChatResponse:
+        bot = self.db.query(Bot).filter(Bot.public_key == payload.public_bot_key).first()
+        if not bot:
+            raise ValueError("Invalid bot key")
+
+        session = self._get_or_create_session(bot=bot, payload=payload)
+        retrieved = self._retrieve_context(bot.id, payload.message)
+        confidence = self._classify_confidence(retrieved)
+        intent = self._detect_intent(payload.message)
+
+        sources = [
+            SourceItem(
+                document_id=item["document_id"],
+                source_name=item["source_name"],
+                source_url=item.get("source_url"),
+                excerpt=item["content"][:220],
+                score=item["score"],
+            )
+            for item in retrieved
+        ]
+
+        if confidence == "low":
+            answer = self._fallback_answer(bot, payload.message)
+            self.analytics.track_event(
+                organization_id=bot.organization_id,
+                bot_id=bot.id,
+                session_id=session.id,
+                event_type="unanswered_question",
+                message_text=payload.message,
+                confidence=confidence,
+                metadata={"intent": intent},
+            )
+            escalation_triggered = EscalationService(self.db).maybe_escalate(
+                bot=bot,
+                session_id=session.id,
+                intent=intent,
+                reason="low_confidence",
+                transcript=self._build_transcript(payload.history, payload.message, answer),
+                sources=[item.model_dump() for item in sources],
+            )
+        else:
+            answer = self._generate_answer(payload.message, retrieved)
+            escalation_triggered = EscalationService(self.db).maybe_escalate(
+                bot=bot,
+                session_id=session.id,
+                intent=intent,
+                reason="intent_match",
+                transcript=self._build_transcript(payload.history, payload.message, answer),
+                sources=[item.model_dump() for item in sources],
+            )
+
+        self.analytics.track_event(
+            organization_id=bot.organization_id,
+            bot_id=bot.id,
+            session_id=session.id,
+            event_type="question_asked",
+            message_text=payload.message,
+            confidence=confidence,
+            metadata={"intent": intent, "source_count": len(sources)},
+        )
+        if escalation_triggered:
+            self.analytics.track_event(
+                organization_id=bot.organization_id,
+                bot_id=bot.id,
+                session_id=session.id,
+                event_type="escalation_triggered",
+                message_text=payload.message,
+                confidence=confidence,
+                metadata={"intent": intent},
+            )
+
+        self._store_message(session.id, "user", payload.message)
+        self._store_message(session.id, "assistant", answer, sources=[item.model_dump() for item in sources])
+        self.db.commit()
+
+        return ChatResponse(
+            session_id=session.id,
+            answer=answer,
+            sources=sources,
+            confidence=confidence,
+            escalation_triggered=escalation_triggered,
+            escalation_intent=intent if escalation_triggered else None,
+        )
+
+    def _get_or_create_session(self, bot: Bot, payload: ChatRequest) -> ChatSession:
+        if payload.session_id:
+            existing = self.db.query(ChatSession).filter(ChatSession.id == payload.session_id).first()
+            if existing:
+                return existing
+
+        session = ChatSession(
+            organization_id=bot.organization_id,
+            bot_id=bot.id,
+            user_identifier=payload.user_identifier,
+        )
+        self.db.add(session)
+        self.db.flush()
+        return session
+
+    def _generate_answer(self, question: str, retrieved: list[dict[str, Any]]) -> str:
+        if not settings.openai_api_key:
+            return self._fallback_no_ai_answer()
+        context = "\n\n".join(
+            [f"Source: {item['source_name']}\nContent: {item['content']}" for item in retrieved]
+        )
+        system_prompt = (
+            "You are a support AI assistant. Answer only from the provided context. "
+            "If the context is insufficient, say you do not know based on the documentation."
+        )
+        try:
+            response = client.responses.create(
+                model=settings.openai_chat_model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f"Question: {question}\n\nContext:\n{context}",
+                    },
+                ],
+            )
+            return response.output_text.strip()
+        except (APIConnectionError, APIError, AuthenticationError):
+            return self._fallback_no_ai_answer()
+
+    def _detect_intent(self, message: str) -> str:
+        lowered = message.lower()
+        if any(word in lowered for word in ["refund", "money back", "chargeback"]):
+            return "refund"
+        if any(word in lowered for word in ["complaint", "angry", "upset", "bad service"]):
+            return "complaint"
+        if any(word in lowered for word in ["urgent", "asap", "immediately", "critical"]):
+            return "urgent"
+        if any(word in lowered for word in ["pricing", "demo", "buy", "enterprise", "sales"]):
+            return "sales"
+        if any(word in lowered for word in ["invoice", "billing", "payment"]):
+            return "billing"
+        return "general"
+
+    def _classify_confidence(self, retrieved: list[dict]) -> str:
+        if not retrieved:
+            return "low"
+        top_score = retrieved[0]["score"]
+        if top_score >= 0.78:
+            return "high"
+        if top_score >= 0.62:
+            return "medium"
+        return "low"
+
+    def _build_transcript(self, history: list, user_message: str, answer: str) -> list[dict]:
+        transcript = [{"role": item.role, "content": item.content} for item in history]
+        transcript.append({"role": "user", "content": user_message})
+        transcript.append({"role": "assistant", "content": answer})
+        return transcript
+
+    def _store_message(self, session_id: str, role: str, content: str, sources: list[dict] | None = None) -> None:
+        self.db.add(
+            ChatMessage(
+                session_id=session_id,
+                role=role,
+                content=content,
+                source_json=json.dumps(sources or []),
+            )
+        )
+
+    def _retrieve_context(self, bot_id: str, message: str) -> list[dict]:
+        query_vector = embed_query(message)
+        return FaissVectorStore(bot_id).search(query_vector, limit=5)
+
+    def _fallback_answer(self, bot: Bot, message: str) -> str:
+        lowered = message.lower()
+        if any(phrase in lowered for phrase in ["what is this", "who are you", "what do you do", "what is this project"]):
+            return (
+                f"This is {bot.name}, a documentation assistant for your website. "
+                "It can answer questions from uploaded docs, cite sources, and escalate sensitive requests."
+            )
+        return self._fallback_no_ai_answer()
+
+    def _fallback_no_ai_answer(self) -> str:
+        return (
+            "I can help with documentation-based support, but AI answering is not configured yet. "
+            "Add an OpenAI API key and upload knowledge sources to enable full responses."
+        )

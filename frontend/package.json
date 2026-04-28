@@ -1,0 +1,13 @@
+{
+  "name": "ai-chatbot-saas-frontend",
+  "private": true,
+  "workspaces": [
+    "admin-dashboard",
+    "chat-widget"
+  ],
+  "scripts": {
+    "dev:admin": "npm --workspace admin-dashboard run dev",
+    "dev:widget": "npm --workspace chat-widget run dev",
+    "build": "npm --workspace admin-dashboard run build && npm --workspace chat-widget run build"
+  }
+}

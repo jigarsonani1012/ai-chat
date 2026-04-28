@@ -1,0 +1,221 @@
+:root {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.widget-root {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  color: #e9f1f8;
+}
+
+.widget-panel,
+.launcher-button,
+.icon-button,
+.widget-message,
+.source-chip {
+  border-radius: 8px;
+}
+
+.widget-panel {
+  width: min(380px, calc(100vw - 24px));
+  height: min(640px, calc(100vh - 96px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 35%),
+    #081018;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.widget-header,
+.widget-footer {
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.widget-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.widget-header strong,
+.widget-message p,
+.source-chip strong {
+  display: block;
+}
+
+.widget-header span,
+.confidence-chip,
+.escalation-chip,
+.widget-state span {
+  color: #9cb3c5;
+  font-size: 12px;
+}
+
+.widget-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+}
+
+.widget-transcript {
+  padding: 14px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.widget-message {
+  max-width: 92%;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.widget-message.assistant {
+  align-self: flex-start;
+  border-left: 3px solid var(--widget-accent);
+}
+
+.widget-message.user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.1);
+  border-left: 3px solid #d57b40;
+}
+
+.widget-message p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.source-stack {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-chip {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px;
+  text-decoration: none;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.source-chip span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #9cb3c5;
+}
+
+.confidence-chip,
+.escalation-chip {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.escalation-chip {
+  color: #f8d37d;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: 1fr 44px;
+  gap: 10px;
+}
+
+.composer input {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.send-button,
+.launcher-button {
+  border: 0;
+  background: linear-gradient(135deg, var(--widget-accent), #67b77a);
+  color: white;
+}
+
+.send-button {
+  display: grid;
+  place-items: center;
+}
+
+.launcher-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+}
+
+.widget-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.widget-error {
+  margin: 0 0 10px;
+  color: #ff9a92;
+  font-size: 12px;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 560px) {
+  .widget-root {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
+    align-items: stretch;
+  }
+
+  .widget-panel {
+    width: 100%;
+    height: min(72vh, 620px);
+  }
+
+  .launcher-button {
+    justify-content: center;
+  }
+}

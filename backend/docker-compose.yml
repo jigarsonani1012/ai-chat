@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    container_name: ai-chatbot-api
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build: .
+    container_name: ai-chatbot-worker
+    command: ["dramatiq", "app.workers.actors"]
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16
+    container_name: ai-chatbot-postgres
+    environment:
+      POSTGRES_DB: ai_chatbot_saas
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: ai-chatbot-redis
+    ports:
+      - "6379:6379"
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: ai-chatbot-mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  postgres_data:
