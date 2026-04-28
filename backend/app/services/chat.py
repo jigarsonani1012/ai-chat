@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from openai import APIConnectionError, APIError, AuthenticationError
@@ -26,6 +27,20 @@ class ChatService:
             raise ValueError("Invalid bot key")
 
         session = self._get_or_create_session(bot=bot, payload=payload)
+        smalltalk_answer = self._smalltalk_answer(bot, payload.message)
+        if smalltalk_answer:
+            self._store_message(session.id, "user", payload.message)
+            self._store_message(session.id, "assistant", smalltalk_answer, sources=[])
+            self.db.commit()
+            return ChatResponse(
+                session_id=session.id,
+                answer=smalltalk_answer,
+                sources=[],
+                confidence="high",
+                escalation_triggered=False,
+                escalation_intent=None,
+            )
+
         retrieved = self._retrieve_context(bot.id, payload.message)
         confidence = self._classify_confidence(retrieved)
         intent = self._detect_intent(payload.message)
@@ -42,7 +57,7 @@ class ChatService:
         ]
 
         if confidence == "low":
-            answer = self._fallback_answer(bot, payload.message)
+            answer = self._fallback_answer(bot, payload.message, payload.history)
             self.analytics.track_event(
                 organization_id=bot.organization_id,
                 bot_id=bot.id,
@@ -126,8 +141,10 @@ class ChatService:
             [f"Source: {item['source_name']}\nContent: {item['content']}" for item in retrieved]
         )
         system_prompt = (
-            "You are a support AI assistant. Answer only from the provided context. "
-            "If the context is insufficient, say you do not know based on the documentation."
+            "You are a support AI assistant. Use the provided documentation context as your primary source. "
+            "Answer clearly and accurately. If the user is making simple conversation, you can respond naturally. "
+            "If they ask for details that are not supported by the context, say that the documentation does not "
+            "confirm it instead of inventing facts."
         )
         try:
             response = client.responses.create(
@@ -143,6 +160,38 @@ class ChatService:
             return response.output_text.strip()
         except (APIConnectionError, APIError, AuthenticationError):
             return self._fallback_no_ai_answer()
+
+    def _generate_general_answer(self, bot: Bot, question: str, history: list[Any]) -> str | None:
+        if not settings.openai_api_key:
+            return None
+
+        history_lines = [
+            f"{item.role.capitalize()}: {item.content.strip()}"
+            for item in history[-6:]
+            if getattr(item, "content", "").strip()
+        ]
+        history_block = "\n".join(history_lines)
+
+        system_prompt = (
+            f"You are {bot.name}, a friendly AI assistant embedded on a website. "
+            "You can answer greetings, basic conversational questions, and simple general-help requests. "
+            "Keep replies short, warm, and practical. Do not claim product or company facts unless the user "
+            "provided them or they came from documentation context."
+        )
+        user_prompt = f"Conversation so far:\n{history_block or 'No prior conversation.'}\n\nUser: {question}"
+
+        try:
+            response = client.responses.create(
+                model=settings.openai_chat_model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            answer = response.output_text.strip()
+            return answer or None
+        except (APIConnectionError, APIError, AuthenticationError):
+            return None
 
     def _detect_intent(self, message: str) -> str:
         lowered = message.lower()
@@ -188,17 +237,45 @@ class ChatService:
         query_vector = embed_query(message)
         return FaissVectorStore(bot_id).search(query_vector, limit=5)
 
-    def _fallback_answer(self, bot: Bot, message: str) -> str:
+    def _fallback_answer(self, bot: Bot, message: str, history: list[Any]) -> str:
+        general_answer = self._generate_general_answer(bot, message, history)
+        if general_answer:
+            return general_answer
+
         lowered = message.lower()
         if any(phrase in lowered for phrase in ["what is this", "who are you", "what do you do", "what is this project"]):
             return (
                 f"This is {bot.name}, a documentation assistant for your website. "
                 "It can answer questions from uploaded docs, cite sources, and escalate sensitive requests."
             )
-        return self._fallback_no_ai_answer()
+        return self._fallback_no_ai_answer(bot)
 
-    def _fallback_no_ai_answer(self) -> str:
+    def _fallback_no_ai_answer(self, bot: Bot | None = None) -> str:
+        assistant_name = bot.name if bot else "this assistant"
         return (
-            "I can help with documentation-based support, but AI answering is not configured yet. "
-            "Add an OpenAI API key and upload knowledge sources to enable full responses."
+            f"I can help with greetings and simple conversation, but {assistant_name} needs an OpenAI API key "
+            "for richer answers. Upload documents as well if you want documentation-based support with citations."
         )
+
+    def _smalltalk_answer(self, bot: Bot, message: str) -> str | None:
+        normalized = re.sub(r"[^a-z0-9\s']", " ", message.lower()).strip()
+        compact = " ".join(normalized.split())
+        if not compact:
+            return "I am here whenever you are. Ask me something about the docs or just say hello."
+
+        if compact in {"hi", "hello", "hey", "hii", "helo", "yo"} or compact.startswith(("hi ", "hello ", "hey ")):
+            return (
+                f"Hello! I am {bot.name}. I can help with uploaded documentation, and I can also handle simple questions."
+            )
+        if any(phrase in compact for phrase in ["how are you", "how r you", "how do you do"]):
+            return "I am doing well and ready to help. You can ask me about the docs or any simple question."
+        if any(phrase in compact for phrase in ["thank you", "thanks", "thx"]):
+            return "You are welcome. Keep the questions coming."
+        if compact in {"bye", "goodbye", "see you", "cya"}:
+            return "Bye for now. I will be here when you need me again."
+        if compact in {"who are you", "what are you", "what can you do", "help"}:
+            return (
+                f"I am {bot.name}. I answer questions from uploaded documentation, and I can also reply to simple chat "
+                "like greetings, help requests, and basic conversation."
+            )
+        return None

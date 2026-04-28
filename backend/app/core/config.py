@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     smtp_from: str = "noreply@example.com"
     public_widget_origin: str = "http://localhost:5173"
     admin_dashboard_origin: str = "http://localhost:5174"
+    extra_cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5175",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://127.0.0.1:5175",
+        ]
+    )
     allowed_hosts: list[str] = Field(default_factory=lambda: ["*"])
 
     model_config = SettingsConfigDict(

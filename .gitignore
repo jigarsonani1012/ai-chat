@@ -1,0 +1,45 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+*.out
+*.err
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+!.env.example
+!**/.env.example
+
+# Node / frontend
+**/node_modules/
+**/.vite/
+**/dist/
+**/build/
+**/coverage/
+*.tsbuildinfo
+
+# Python / backend
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
+venv/
+
+# Local app data
+backend/ai_chatbot_saas.db
+backend/storage/uploads/
+backend/storage/vector_indexes/
+
+# Tooling caches
+.cache/
+tmp/
+temp/
